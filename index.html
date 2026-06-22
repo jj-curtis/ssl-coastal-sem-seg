@@ -44,9 +44,15 @@
   .lg-tools button{flex:1;background:#0d1117;color:var(--muted);border:1px solid var(--line);
     border-radius:6px;padding:4px 0;cursor:pointer;font:11px inherit}
   .lg-tools button:hover{color:var(--txt)}
-  #hint{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);
-    color:var(--muted);font-size:11px;background:var(--panel);border:1px solid var(--line);
+  #botbar{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);
+    display:flex;flex-direction:column;align-items:center;gap:8px;
+    width:calc(100% - 32px);max-width:680px;pointer-events:none}
+  #hint{color:var(--muted);font-size:11px;background:var(--panel);border:1px solid var(--line);
     border-radius:20px;padding:6px 14px}
+  #about{width:100%;box-sizing:border-box;text-align:center;
+    color:var(--muted);font-size:11px;line-height:1.5;background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;padding:8px 14px}
+  #about b{color:var(--txt);font-weight:600}
   #loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     color:var(--muted);font-size:14px;pointer-events:none}
 </style>
@@ -112,7 +118,10 @@
   <div id="lg-list"></div>
 </div>
 
-<div id="hint">drag&nbsp;rotate · scroll&nbsp;zoom · right-drag&nbsp;pan</div>
+<div id="botbar">
+  <div id="hint">drag&nbsp;rotate · scroll&nbsp;zoom · right-drag&nbsp;pan</div>
+  <div id="about"><b>Training</b> point clouds are sample tiles used during model training; <b>Classified</b> point clouds are model output. Switch <b>Color by</b> between Class, Intensity, and RGB to see the underlying data. All data is subsampled from 0.04&nbsp;m to 0.2&nbsp;m for display.</div>
+</div>
 <div id="loading">loading…</div>
 
 <script type="module">
