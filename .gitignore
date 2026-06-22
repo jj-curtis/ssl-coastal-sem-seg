@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+
+# NOTE: unlike the R2 deploy, data/ IS committed here — it's what GitHub Pages serves.

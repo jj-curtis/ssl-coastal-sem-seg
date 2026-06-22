@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Coastal Point Cloud Viewer</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22e6; --line:#30363d; --txt:#e6edf3; --muted:#8b949e;
+    --accent:#3B8EDE;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);
+    color:var(--txt);font:13px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  #app{position:fixed;inset:0}
+  canvas{display:block}
+  .panel{position:absolute;background:var(--panel);backdrop-filter:blur(8px);
+    border:1px solid var(--line);border-radius:12px;padding:14px 16px;
+    box-shadow:0 8px 28px #0008}
+  #controls{top:16px;left:16px;width:248px}
+  #legend{top:16px;right:16px;width:208px;max-height:calc(100% - 32px);overflow:auto}
+  h1{font-size:14px;margin:0 0 2px;font-weight:600;letter-spacing:.2px}
+  .sub{color:var(--muted);font-size:11px;margin-bottom:12px}
+  label.fld{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;
+    letter-spacing:.5px;margin:12px 0 5px}
+  select,input[type=range]{width:100%}
+  select{background:#0d1117;color:var(--txt);border:1px solid var(--line);
+    border-radius:7px;padding:6px 8px;font:inherit}
+  .seg{display:flex;gap:4px;margin-top:4px}
+  .seg button{flex:1;background:#0d1117;color:var(--muted);border:1px solid var(--line);
+    border-radius:7px;padding:6px 0;cursor:pointer;font:inherit;transition:.12s}
+  .seg button:hover{color:var(--txt);border-color:#484f58}
+  .seg button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:4px}
+  .row span{color:var(--muted);font-size:11px}
+  .lg-item{display:flex;align-items:center;gap:8px;padding:4px 2px;cursor:pointer;
+    user-select:none;border-radius:6px}
+  .lg-item:hover{background:#ffffff0d}
+  .lg-item.off{opacity:.38}
+  .sw{width:14px;height:14px;border-radius:4px;flex:0 0 auto;border:1px solid #0006}
+  .lg-name{flex:1}
+  .lg-cnt{color:var(--muted);font-size:10px;font-variant-numeric:tabular-nums}
+  .lg-tools{display:flex;gap:6px;margin:6px 0 10px}
+  .lg-tools button{flex:1;background:#0d1117;color:var(--muted);border:1px solid var(--line);
+    border-radius:6px;padding:4px 0;cursor:pointer;font:11px inherit}
+  .lg-tools button:hover{color:var(--txt)}
+  #hint{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);
+    color:var(--muted);font-size:11px;background:var(--panel);border:1px solid var(--line);
+    border-radius:20px;padding:6px 14px}
+  #loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    color:var(--muted);font-size:14px;pointer-events:none}
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+}}
+</script>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="controls" class="panel">
+  <h1>Coastal Point Cloud</h1>
+  <div class="sub">classified mobile-LiDAR · SSL / PTv3</div>
+
+  <label class="fld">Dataset</label>
+  <div class="seg" id="kind">
+    <button data-k="training">Training</button>
+    <button data-k="classified" class="on">Classified</button>
+  </div>
+
+  <label class="fld">Tile</label>
+  <select id="tile"></select>
+
+  <label class="fld">Color by</label>
+  <div class="seg" id="mode">
+    <button data-m="0" class="on">Class</button>
+    <button data-m="1">Intensity</button>
+    <button data-m="2">Elevation</button>
+    <button data-m="3">RGB</button>
+  </div>
+
+  <label class="fld">Point size</label>
+  <input id="psize" type="range" min="0.3" max="4" step="0.1" value="1.3" />
+
+  <label class="fld">Shade by intensity</label>
+  <div class="seg" id="shade">
+    <button data-s="0">Off</button>
+    <button data-s="1" class="on">On</button>
+  </div>
+
+  <label class="fld">Background</label>
+  <div class="seg" id="bg">
+    <button data-b="#0d1117" class="on">Dark</button>
+    <button data-b="#20262e">Slate</button>
+    <button data-b="#f0f0f0">Light</button>
+  </div>
+
+  <div class="row" style="margin-top:14px">
+    <span id="stat">—</span>
+    <span><a href="#" id="reset" style="color:var(--accent);text-decoration:none">reset view</a></span>
+  </div>
+</div>
+
+<div id="legend" class="panel">
+  <h1 style="font-size:13px">Classes</h1>
+  <div class="lg-tools">
+    <button id="lg-all">all</button>
+    <button id="lg-none">none</button>
+  </div>
+  <div id="lg-list"></div>
+</div>
+
+<div id="hint">drag&nbsp;rotate · scroll&nbsp;zoom · right-drag&nbsp;pan</div>
+<div id="loading">loading…</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ---- where to load the packed tiles from ------------------------------------
+const DATA_BASE =
+  new URLSearchParams(location.search).get('data') ||
+  '';                                  // <-- put your R2 public URL here for deployment
+const dataUrl = name => `${DATA_BASE || 'data/'}${name}`;
+
+// ---- class palette (model output indices; 4,5 unused) -----------------------
+// colors keyed by model index (LAS code -> model index via build_las.py LAS_CLASS_MAP)
+const CLASSES = {
+  0:['Ground','#e6194b'],   // LAS 0
+  1:['Water','#0082c8'],    // LAS 9
+  2:['Cliff','#aa6e28'],    // LAS 24
+  3:['Cobble','#ff00ff'],   // LAS 25
+  6:['Riprap','#ffff00'],   // LAS 28
+  7:['Reef','#46f0f0'],     // LAS 29
+  8:['Structure','#ffffff'],// LAS 30
+  9:['People','#00007f'],   // LAS 31
+  10:['Low veg.','#abffa2'],// LAS 3
+  11:['Med. veg.','#00f100'],// LAS 4
+  12:['High veg.','#38b49b'],// LAS 5
+};
+const NSLOT = 13;
+const hex2rgb = h => [parseInt(h.slice(1,3),16)/255,parseInt(h.slice(3,5),16)/255,parseInt(h.slice(5,7),16)/255];
+
+// flat arrays for the shader
+const classColors = new Float32Array(NSLOT*3);
+const classVisible = new Float32Array(NSLOT).fill(1);
+for (let i=0;i<NSLOT;i++){
+  const c = CLASSES[i] ? hex2rgb(CLASSES[i][1]) : [0.5,0.5,0.5];
+  classColors.set(c, i*3);
+}
+
+// ---- scene ------------------------------------------------------------------
+const app = document.getElementById('app');
+const renderer = new THREE.WebGLRenderer({antialias:false});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth, innerHeight);
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#0d1117');
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 5000);
+camera.up.set(0,0,1); 
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.screenSpacePanning = false;
+
+addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---- point material (color modes done on the GPU) ---------------------------
+const uniforms = {
+  uMode:{value:0}, uSize:{value:1.3}, uZmin:{value:0}, uZrange:{value:1},
+  uShade:{value:1},
+  uClassColors:{value:classColors}, uClassVisible:{value:classVisible},
+};
+const material = new THREE.ShaderMaterial({
+  uniforms,
+  vertexShader:`
+    attribute float aClass; attribute float aStrength; attribute vec3 aRGB;
+    uniform float uMode, uSize, uZmin, uZrange, uShade;
+    uniform vec3 uClassColors[${NSLOT}];
+    uniform float uClassVisible[${NSLOT}];
+    varying vec3 vColor; varying float vHide;
+    // compact viridis ramp
+    vec3 ramp(float t){
+      t = clamp(t,0.0,1.0);
+      vec3 a=vec3(0.28,0.0,0.33), b=vec3(0.13,0.57,0.55),
+           c=vec3(0.99,0.91,0.14);
+      return t<0.5 ? mix(a,b,t*2.0) : mix(b,c,(t-0.5)*2.0);
+    }
+    void main(){
+      int ci = int(aClass + 0.5);
+      vHide = uClassVisible[ci];
+      if(uMode<0.5)        vColor = uClassColors[ci];
+      else if(uMode<1.5)   vColor = ramp(aStrength);
+      else if(uMode<2.5)   vColor = ramp((position.z - uZmin)/uZrange);
+      else                 vColor = aRGB;
+      // overlay reflectance as relief: modulate brightness by intensity
+      vColor *= mix(1.0, 0.35 + 0.9*aStrength, uShade);
+      vec4 mv = modelViewMatrix * vec4(position,1.0);
+      gl_Position = projectionMatrix * mv;
+      gl_PointSize = vHide < 0.5 ? 0.0 : uSize * (300.0 / -mv.z);
+    }`,
+  fragmentShader:`
+    varying vec3 vColor; varying float vHide;
+    void main(){
+      if(vHide < 0.5) discard;
+      vec2 d = gl_PointCoord - vec2(0.5);
+      if(dot(d,d) > 0.25) discard;            // round points
+      gl_FragColor = vec4(vColor,1.0);
+    }`,
+});
+
+let cloud = null;
+
+function disposeCloud(){
+  if(!cloud) return;
+  scene.remove(cloud); cloud.geometry.dispose(); cloud = null;
+}
+
+async function loadTile(meta){
+  document.getElementById('loading').style.display='flex';
+  disposeCloud();
+  // Tiles may be split into <100 MB chunks (GitHub file cap). Fetch all chunks
+  // and merge them into one combined buffer; single-chunk tiles work the same.
+  const chunks = meta.chunks || [{file:`${meta.id}.bin`, count:meta.count}];
+  const n = meta.count;
+  const pos = new Float32Array(n*3);
+  const cls = new Uint8Array(n);
+  const str = new Uint8Array(n);
+  const rgb = new Uint8Array(n*3);
+  const bufs = await Promise.all(
+    chunks.map(c => fetch(dataUrl(c.file)).then(r=>r.arrayBuffer())));
+  let pOff = 0;                                  // points written so far
+  for(let i=0;i<chunks.length;i++){
+    const k = chunks[i].count, buf = bufs[i]; let o = 0;
+    pos.set(new Float32Array(buf, o, k*3), pOff*3); o += k*3*4;
+    cls.set(new Uint8Array(buf, o, k),     pOff);   o += k;
+    str.set(new Uint8Array(buf, o, k),     pOff);   o += k;
+    rgb.set(new Uint8Array(buf, o, k*3),   pOff*3); o += k*3;
+    pOff += k;
+  }
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos,3));
+  g.setAttribute('aClass',   new THREE.BufferAttribute(Float32Array.from(cls),1));
+  g.setAttribute('aStrength',new THREE.BufferAttribute(Float32Array.from(str,v=>v/255),1));
+  const rgbf = new Float32Array(n*3); for(let i=0;i<rgbf.length;i++) rgbf[i]=rgb[i]/255;
+  g.setAttribute('aRGB', new THREE.BufferAttribute(rgbf,3));
+
+  uniforms.uZmin.value = meta.bounds.min[2];
+  uniforms.uZrange.value = Math.max(meta.bounds.max[2]-meta.bounds.min[2], 1e-3);
+
+  cloud = new THREE.Points(g, material);
+  scene.add(cloud);
+
+  buildLegend(meta);
+  frameTile(meta, g);
+  document.getElementById('stat').textContent = `${n.toLocaleString()} pts`;
+  document.getElementById('loading').style.display='none';
+}
+
+let lastPose = null;
+
+function frameTile(meta, g){
+  const mn=meta.bounds.min, mx=meta.bounds.max;
+  const cx=(mn[0]+mx[0])/2, cy=(mn[1]+mx[1])/2, cz=(mn[2]+mx[2])/2;
+  const r3 = Math.hypot(mx[0]-mn[0], mx[1]-mn[1], mx[2]-mn[2])/2;
+
+  // derive horizontal principal axes from the points (sampled):
+  // larger eigenvalue -> along-shore axis; perpendicular -> cross-shore.
+  const P = g.attributes.position.array, C = g.attributes.aClass.array;
+  const n = P.length/3, stride = Math.max(1, Math.floor(n/150000));
+  let sxx=0,sxy=0,syy=0,k=0, sea=[0,0,0], land=[0,0,0];
+  for(let i=0;i<n;i+=stride){
+    const x=P[3*i]-cx, y=P[3*i+1]-cy;
+    sxx+=x*x; sxy+=x*y; syy+=y*y; k++;
+    const c=Math.round(C[i]);
+    if(c===1||c===7){ sea[0]+=x; sea[1]+=y; sea[2]++; }              // water, reef
+    else if(c===2||c===10||c===11||c===12){ land[0]+=x; land[1]+=y; land[2]++; } // cliff, veg
+  }
+  sxx/=k; sxy/=k; syy/=k;
+  const tr=sxx+syy, disc=Math.sqrt(Math.max(tr*tr/4-(sxx*syy-sxy*sxy),0));
+  const l1=tr/2+disc;                                  // along-shore eigenvalue
+  let ax,ay;
+  if(Math.abs(sxy)>1e-9){ ax=l1-syy; ay=sxy; } else if(sxx>=syy){ ax=1; ay=0; } else { ax=0; ay=1; }
+  const aL=Math.hypot(ax,ay)||1; ax/=aL; ay/=aL;       // along-shore unit
+  let nx=-ay, ny=ax;                                   // cross-shore unit (perpendicular)
+
+  // orient cross-shore to point seaward (water side); camera sits there & looks landward
+  if(sea[2] && land[2]){
+    const dx=sea[0]/sea[2]-land[0]/land[2], dy=sea[1]/sea[2]-land[1]/land[2];
+    if(dx*nx+dy*ny < 0){ nx=-nx; ny=-ny; }
+  }
+
+  const alongLen = Math.hypot(mx[0]-mn[0], mx[1]-mn[1]);  // ~strip length for a diagonal box
+  const dist = alongLen*0.6 + 1e-3;
+  const tilt = 20*Math.PI/180;                          // downward look angle
+  const horiz = dist*Math.cos(tilt), height = dist*Math.sin(tilt);
+
+  lastPose = {
+    target:[cx,cy,cz],
+    position:[cx + nx*horiz, cy + ny*horiz, cz + height + r3*0.1],
+    near: Math.max(dist/200, 0.05), far: dist*8 + r3*4,
+  };
+  applyPose(lastPose);
+}
+
+function applyPose(p){
+  controls.target.set(p.target[0],p.target[1],p.target[2]);
+  camera.position.set(p.position[0],p.position[1],p.position[2]);
+  camera.near=p.near; camera.far=p.far; camera.updateProjectionMatrix();
+  controls.update();
+}
+
+// ---- legend -----------------------------------------------------------------
+function buildLegend(meta){
+  const list = document.getElementById('lg-list');
+  list.innerHTML='';
+  const present = Object.keys(meta.classes).map(Number).sort((a,b)=>a-b);
+  for(const id of present){
+    if(!CLASSES[id]) continue;
+    const [name,hex]=CLASSES[id];
+    const el=document.createElement('div');
+    el.className='lg-item'+(classVisible[id]?'':' off');
+    el.innerHTML=`<span class="sw" style="background:${hex}"></span>`+
+      `<span class="lg-name">${name}</span>`+
+      `<span class="lg-cnt">${meta.classes[id].toLocaleString()}</span>`;
+    el.onclick=()=>{ classVisible[id]= classVisible[id]?0:1;
+      el.classList.toggle('off', !classVisible[id]); };
+    list.appendChild(el);
+  }
+  document.getElementById('lg-all').onclick=()=>setAll(1,present);
+  document.getElementById('lg-none').onclick=()=>setAll(0,present);
+}
+function setAll(v,present){
+  for(const id of present) classVisible[id]=v;
+  document.querySelectorAll('#lg-list .lg-item').forEach((el,i)=>
+    el.classList.toggle('off', !v));
+}
+
+// ---- UI wiring --------------------------------------------------------------
+document.querySelectorAll('#mode button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#mode button').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on'); uniforms.uMode.value=+b.dataset.m;
+});
+document.querySelectorAll('#bg button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#bg button').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on'); scene.background=new THREE.Color(b.dataset.b);
+});
+document.querySelectorAll('#shade button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#shade button').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on'); uniforms.uShade.value=+b.dataset.s;
+});
+document.getElementById('psize').oninput=e=>uniforms.uSize.value=+e.target.value;
+document.getElementById('reset').onclick=e=>{e.preventDefault();
+  if(lastPose) applyPose(lastPose);};
+
+let currentMeta=null;
+async function selectTile(id, list){
+  currentMeta = list.find(t=>t.id===id);
+  await loadTile(currentMeta);
+}
+
+// ---- boot -------------------------------------------------------------------
+(async ()=>{
+  let manifest;
+  try { manifest = await (await fetch(dataUrl('manifest.json'))).json(); }
+  catch(e){ document.getElementById('loading').textContent=
+    'No manifest.json — run  python build_tiles.py (or check DATA_BASE)'; return; }
+  const tiles = manifest.tiles;
+  const kindOf = t => t.kind || 'training';   // untagged entries are training tiles
+  const sel = document.getElementById('tile');
+  let dataKind = 'classified';                 // default to the full classified surveys
+  const PREFERRED = 'ptv3_torrey';             // …showing this survey first (smallest, ~88 MB → fast first load)
+
+  function populateTiles(){
+    const matching = tiles.filter(t=>kindOf(t)===dataKind);
+    sel.innerHTML='';
+    for(const t of matching){
+      const o=document.createElement('option'); o.value=t.id; o.textContent=t.id;
+      sel.appendChild(o);
+    }
+    return matching;
+  }
+
+  sel.onchange=()=>selectTile(sel.value, tiles);
+  document.querySelectorAll('#kind button').forEach(b=>b.onclick=async()=>{
+    document.querySelectorAll('#kind button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on'); dataKind=b.dataset.k;
+    const matching=populateTiles();
+    if(matching.length) await selectTile(matching[0].id, tiles);
+  });
+
+  const first=populateTiles();
+  if(first.length){
+    const start = first.some(t=>t.id===PREFERRED) ? PREFERRED : first[0].id;
+    sel.value = start;
+    await selectTile(start, tiles);
+  }
+})();
+
+function animate(){ requestAnimationFrame(animate); controls.update();
+  renderer.render(scene,camera); }
+animate();
+</script>
+</body>
+</html>
